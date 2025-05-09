@@ -1,4 +1,4 @@
-#safeRouteFinder
+## safeRouteFinder
 *Because you must look before you leave!*
 
 The issue of safety is of crucial importance in Delhi with the ever so escalating crime rates. Putting the same crime related data to good use, we have come up with an app that suggests alternative routes between any two places in Delhi, giving information about not only the time duaration and distance of travel, but also a certain 'Danger Index' of each route.
