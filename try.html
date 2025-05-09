@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Safe Route Finder</title>
+    <meta name="viewport" content="initial-scale=1.0, user-scalable=no">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/semantic-ui/2.2.10/semantic.min.css">
+    <meta charset="utf-8">
+    <style>
+        #map {
+            height: 100%;
+        }
+        html, body {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+        }
+        .controls {
+            margin-top: 10px;
+            border: 1px solid transparent;
+            border-radius: 2px 0 0 2px;
+            box-sizing: border-box;
+            -moz-box-sizing: border-box;
+            height: 32px;
+            outline: none;
+            box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+        }
+        #origin-input,
+        #destination-input {
+            background-color: #fff;
+            font-family: Roboto;
+            font-size: 15px;
+            font-weight: 300;
+            margin-left: 12px;
+            padding: 0 11px 0 13px;
+            text-overflow: ellipsis;
+            width: 200px;
+        }
+        .pac-container {
+            z-index: 10000 !important;
+        }
+    </style>
+</head>
+<body>
+    <div class="ui main container segment">
+        <h1 style="font-size: 75px; font-family: georgia">safeRouteFinder</h1>
+        <h2 style="text-align: right; font-family: georgia">Because you must look before you leave!</h2>
+    </div>
+    
+    <div class="ui container">
+        <input id="origin-input" class="controls" type="text" placeholder="Enter an origin location">
+        <input id="destination-input" class="controls" type="text" placeholder="Enter a destination location">
+        
+        <div id="mode-selector" class="controls">
+            <input type="radio" name="type" id="changemode-walking" checked="checked">
+            <label for="changemode-walking">Walking</label>
+            <input type="radio" name="type" id="changemode-transit">
+            <label for="changemode-transit">Transit</label>
+            <input type="radio" name="type" id="changemode-driving">
+            <label for="changemode-driving">Driving</label>
+        </div>
+    </div>
+
+    <div id="map" class="ui container" style="height: 500px;"></div>
+    
+    <div class="ui container">
+        <h2>Choose the path with the least danger index for a safe travel!</h2>
+        <div id="route-info"></div>
+    </div>
+
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/1.7.2/jquery.min.js"></script>
+    <script>
+        // Initialize variables
+        var map;
+        var directionsService;
+        var directionsDisplay;
+        var originAutocomplete;
+        var destinationAutocomplete;
+        var renderers = []; // To store multiple route renderers
+
+        // Crime data - consider loading from external JSON file
+        var crimeData = [
+            {lat: 28.5363, lng: 77.2492, risk: 1},
+            {lat: 28.6127, lng: 77.0860, risk: 2},
+            // Add all other data points here...
+        ];
+
+        function initMap() {
+            // Create map centered on Delhi
+            map = new google.maps.Map(document.getElementById('map'), {
+                center: {lat: 28.6139, lng: 77.2090},
+                zoom: 12,
+                mapTypeId: 'terrain'
+            });
+
+            // Initialize services
+            directionsService = new google.maps.DirectionsService();
+            directionsDisplay = new google.maps.DirectionsRenderer();
+            directionsDisplay.setMap(map);
+
+            // Initialize autocomplete
+            initAutocomplete();
+
+            // Add crime markers
+            addCrimeMarkers();
+        }
+
+        function initAutocomplete() {
+            originAutocomplete = new google.maps.places.Autocomplete(
+                document.getElementById('origin-input'),
+                {types: ['geocode'], componentRestrictions: {country: 'in'}}
+            );
+            
+            destinationAutocomplete = new google.maps.places.Autocomplete(
+                document.getElementById('destination-input'),
+                {types: ['geocode'], componentRestrictions: {country: 'in'}}
+            );
+
+            // Add event listeners
+            originAutocomplete.addListener('place_changed', calculateRoute);
+            destinationAutocomplete.addListener('place_changed', calculateRoute);
+            
+            // Mode selector listeners
+            document.getElementById('changemode-walking').addEventListener('click', calculateRoute);
+            document.getElementById('changemode-transit').addEventListener('click', calculateRoute);
+            document.getElementById('changemode-driving').addEventListener('click', calculateRoute);
+        }
+
+        function addCrimeMarkers() {
+            // Icons for different risk levels
+            const icons = {
+                4: {url: 'https://cdn.pixabay.com/photo/2012/04/23/16/54/warning-39047_640.png', scaledSize: new google.maps.Size(28, 28)},
+                3: {url: 'https://www.canada.ca/content/dam/hc-sc/migration/hc-sc/cps-spc/images/legislation/acts-lois/hazard-symbol-danger1.jpg', scaledSize: new google.maps.Size(28, 28)},
+                2: {url: 'https://cdn3.iconfinder.com/data/icons/picons-weather/57/53_warning-256.png', scaledSize: new google.maps.Size(23, 23)},
+                1: {url: 'https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/SNice.svg/220px-SNice.svg.png', scaledSize: new google.maps.Size(23, 23)},
+                0: {url: 'https://static9.depositphotos.com/1431107/1143/i/950/depositphotos_11437164-stock-photo-green-tick.jpg', scaledSize: new google.maps.Size(23, 23)}
+            };
+
+            crimeData.forEach(point => {
+                new google.maps.Marker({
+                    position: {lat: point.lat, lng: point.lng},
+                    icon: icons[point.risk],
+                    map: map
+                });
+            });
+        }
+
+        function calculateRoute() {
+            if (!originAutocomplete.getPlace() || !destinationAutocomplete.getPlace()) {
+                return;
+            }
+
+            // Clear previous routes
+            renderers.forEach(renderer => renderer.setMap(null));
+            renderers = [];
+
+            // Get selected travel mode
+            const travelMode = document.querySelector('input[name="type"]:checked').value.toUpperCase();
+
+            // Prepare request
+            const request = {
+                origin: {placeId: originAutocomplete.getPlace().place_id},
+                destination: {placeId: destinationAutocomplete.getPlace().place_id},
+                travelMode: google.maps.TravelMode[travelMode],
+                provideRouteAlternatives: true
+            };
+
+            directionsService.route(request, (response, status) => {
+                if (status === 'OK') {
+                    const colors = ["purple", "yellow", "green", "blue", "pink"];
+                    let routeInfoHtml = '';
+
+                    response.routes.forEach((route, index) => {
+                        // Create a new renderer for each route
+                        const renderer = new google.maps.DirectionsRenderer({
+                            map: map,
+                            directions: response,
+                            routeIndex: index,
+                            polylineOptions: {
+                                strokeColor: colors[index % colors.length],
+                                strokeOpacity: 0.7,
+                                strokeWeight: 6
+                            }
+                        });
+                        renderers.push(renderer);
+
+                        // Calculate danger index
+                        const dangerIndex = calculateDangerIndex(route);
+
+                        // Add route info
+                        routeInfoHtml += `
+                            <div class="ui segment">
+                                <h3>Route ${index + 1}</h3>
+                                <ul>
+                                    <li>Color: ${colors[index % colors.length]}</li>
+                                    <li>Distance: ${route.legs[0].distance.text}</li>
+                                    <li>Duration: ${route.legs[0].duration.text}</li>
+                                    <li>Danger Index: ${dangerIndex.toFixed(2)}</li>
+                                </ul>
+                            </div>
+                        `;
+                    });
+
+                    document.getElementById('route-info').innerHTML = routeInfoHtml;
+                } else {
+                    console.error('Directions request failed:', status);
+                }
+            });
+        }
+
+        function calculateDangerIndex(route) {
+            let dangerSum = 0;
+            let pointCount = 0;
+            
+            route.overview_path.forEach(point => {
+                crimeData.forEach(crime => {
+                    // Simple distance calculation (for demo purposes)
+                    const distance = Math.sqrt(
+                        Math.pow(point.lat() - crime.lat, 2) + 
+                        Math.pow(point.lng() - crime.lng, 2)
+                    );
+                    
+                    if (distance < 0.01) { // ~1km radius
+                        dangerSum += crime.risk;
+                        pointCount++;
+                    }
+                });
+            });
+            
+            return pointCount > 0 ? dangerSum / pointCount : 0;
+        }
+    </script>
+    <!-- Replace YOUR_API_KEY with your actual Google Maps API key -->
+    <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAIEs3j-gJjHt0lu2ajZ9kG3rfHGE9Q9Bs&libraries=places&callback=initMap"></script>
+</body>
+</html>
